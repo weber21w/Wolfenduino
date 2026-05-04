@@ -132,7 +132,7 @@ Menu.o: ../Game/Menu.c ../DataHeaders/Data_GUI.h ../Game/Defines.h
 	$(CC) $(INCLUDES) $(CFLAGS) -c $< -o $@
 
 ../DataHeaders/e1m1-uncompressed.inc: ../DataHeaders/e1m1.mid
-	$(UZEBIN_DIR)/midiconv -f 16 ../DataHeaders/e1m1.mid ../DataHeaders/e1m1-uncompressed.inc -ve1m1_mus
+	$(UZEBIN_DIR)/midiconv -f 15 ../DataHeaders/e1m1.mid ../DataHeaders/e1m1-uncompressed.inc -ve1m1_mus
 
 
 MIDI_UNCOMPRESSED_LIST = ../DataHeaders/e1m1-uncompressed.inc

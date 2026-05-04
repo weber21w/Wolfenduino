@@ -9,6 +9,88 @@ void Player_construct(Player* self)
 	(void)self;
 }
 
+
+#define PLAYER_KONAMI_LENGTH 10
+#define PLAYER_KONAMI_INPUT_MASK (Input_Dpad_Up | Input_Dpad_Down | Input_Dpad_Left | Input_Dpad_Right | Input_Btn_A | Input_Btn_B)
+
+static uint8_t Player_konamiIndex = 0;
+static uint16_t Player_konamiLastInput = 0;
+
+static uint16_t Player_getKonamiInput(uint8_t index)
+{
+	switch(index)
+	{
+	case 0:
+	case 1:
+		return Input_Dpad_Up;
+	case 2:
+	case 3:
+		return Input_Dpad_Down;
+	case 4:
+	case 6:
+		return Input_Dpad_Left;
+	case 5:
+	case 7:
+		return Input_Dpad_Right;
+	case 8:
+		return Input_Btn_B;
+	case 9:
+		return Input_Btn_A;
+	default:
+		return 0;
+	}
+}
+
+static void Player_grantKonamiCheat(Player* self)
+{
+	self->hp = 100;
+	self->weapon.ammo = 99;
+	self->inventory.hasMachineGun = 1;
+	self->inventory.hasChainGun = 1;
+	self->weapon.type = WeaponType_ChainGun;
+	self->weapon.frame = 0;
+	self->weapon.time = 0;
+	self->weapon.debounce = false;
+	self->weapon.shooting = false;
+	Platform_playSound(Sound_CollectWeapon);
+}
+
+static void Player_updateKonamiCode(Player* self, uint16_t input)
+{
+	uint16_t pressed;
+	uint16_t relevant;
+	uint16_t expected;
+
+	pressed = (input & ~Player_konamiLastInput) & PLAYER_KONAMI_INPUT_MASK;
+	Player_konamiLastInput = input;
+
+	if(pressed == 0)
+	{
+		return;
+	}
+
+	relevant = pressed;
+	if((relevant & (relevant - 1)) != 0)
+	{
+		Player_konamiIndex = 0;
+		return;
+	}
+
+	expected = Player_getKonamiInput(Player_konamiIndex);
+	if(relevant == expected)
+	{
+		Player_konamiIndex++;
+		if(Player_konamiIndex >= PLAYER_KONAMI_LENGTH)
+		{
+			Player_grantKonamiCheat(self);
+			Player_konamiIndex = 0;
+		}
+		return;
+	}
+
+	Player_konamiIndex = (relevant == Input_Dpad_Up) ? 1 : 0;
+}
+
 static bool Player_canUseWeapon(Player* self, uint8_t weaponType)
 {
 	switch(weaponType)
@@ -97,6 +179,7 @@ void Player_update(Player* self){
 		uint16_t input = Platform_readInput();
 		bool strafe = (input & Input_Btn_A) != 0;
 
+		Player_updateKonamiCode(self, input);
 		Player_updateWeaponCycleInput(self, input);
 
 		if(input == Input_Btn_A)
@@ -593,6 +676,8 @@ void Player_init(Player* self){
 	self->weapon.debounce = false;
 	self->weapon.shooting = false;
 	self->weaponCycleHeld = 0;
+	Player_konamiIndex = 0;
+	Player_konamiLastInput = 0;
 
 	// Find player start tile.  Do not use Map_updateBufferPosition() here:
 	// streaming every 16x16 chunk while searching pollutes the active door/item/

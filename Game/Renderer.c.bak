@@ -4,13 +4,9 @@
 #include "TileTypes.h"
 
 #include "../DataHeaders/Data_Walls.h"
-#if WOLF3D_FAST_UNPACKED_WALL_TEXTURES && WOLF3D_FAST_WALL_V_LOOKUP
-#include "../DataHeaders/Data_WallLUT.h"
-#endif
 #include "../DataHeaders/Data_Pistol.h"
 #include "../DataHeaders/Data_Knife.h"
 #include "../DataHeaders/Data_Machinegun.h"
-#include "../DataHeaders/Data_Chaingun.h"
 #include "../DataHeaders/Data_Decorations.h"
 #include "../DataHeaders/Data_BlockingDecorations.h"
 #include "../DataHeaders/Data_Items.h"
@@ -50,32 +46,6 @@ static inline void Renderer_writePixelFastClipped(int16_t x, int16_t y, uint8_t 
 		Renderer_writePixelFast((uint8_t)x, (uint8_t)y, colour);
 	}
 }
-
-static inline void Renderer_writeColumnPixelPtrFast(uint8_t** dst, uint8_t* mask, uint8_t colour)
-{
-	if(Renderer_physicalColour(colour))
-	{
-		**dst |= *mask;
-	}
-	else
-	{
-		**dst &= (uint8_t)~(*mask);
-	}
-
-	*mask <<= 1;
-	if(*mask == 0)
-	{
-		*mask = 1;
-		*dst += WOLF3D_SBUFFER_WIDTH;
-	}
-}
-
-#if WOLF3D_FAST_WALL_PAGE_BLIT
-static inline void Renderer_mergePageByte(uint8_t* dst, uint8_t writeMask, uint8_t valueMask)
-{
-	*dst = (uint8_t)((*dst & (uint8_t)~writeMask) | valueMask);
-}
-#endif
 #else
 static inline void Renderer_writePixelFast(uint8_t x, uint8_t y, uint8_t colour)
 {
@@ -102,76 +72,6 @@ static inline void Renderer_fillRectFast(uint8_t x, uint8_t y, uint8_t w, uint8_
 	}
 }
 
-
-static inline void Renderer_maskedPageWrite(uint8_t* dst, uint8_t mask, uint8_t colour)
-{
-#if defined(PLATFORM_UZEBOX_MODE23)
-	uint8_t value = Renderer_physicalColour(colour) ? mask : 0;
-	*dst = (uint8_t)((*dst & (uint8_t)~mask) | value);
-#else
-	(void)dst;
-	(void)mask;
-	(void)colour;
-#endif
-}
-
-static inline void Renderer_fillRectPageFast(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t colour)
-{
-#if defined(PLATFORM_UZEBOX_MODE23) && WOLF3D_FAST_FULLSCREEN_MAP_DRAW
-	uint8_t sx0;
-	uint8_t sx1;
-	uint8_t yEnd;
-
-	if(w == 0 || h == 0 || x >= DISPLAYWIDTH || y >= DISPLAYHEIGHT)
-	{
-		return;
-	}
-	if((uint16_t)x + w > DISPLAYWIDTH)
-	{
-		w = (uint8_t)(DISPLAYWIDTH - x);
-	}
-	if((uint16_t)y + h > DISPLAYHEIGHT)
-	{
-		h = (uint8_t)(DISPLAYHEIGHT - y);
-	}
-
-	sx0 = (uint8_t)(x + WOLF3D_SBUFFER_X_OFFSET);
-	sx1 = (uint8_t)(sx0 + w);
-	y = (uint8_t)(y + WOLF3D_SBUFFER_Y_OFFSET);
-	yEnd = (uint8_t)(y + h - 1);
-
-	while(y <= yEnd)
-	{
-		uint8_t page = (uint8_t)(y >> 3);
-		uint8_t firstBit = (uint8_t)(y & 7);
-		uint8_t lastBit = 7;
-		uint8_t pageLast = (uint8_t)((page << 3) + 7);
-		uint8_t mask;
-		uint8_t sx;
-
-		if(pageLast > yEnd)
-		{
-			pageLast = yEnd;
-			lastBit = (uint8_t)(yEnd & 7);
-		}
-
-		mask = (uint8_t)((uint8_t)(0xffu << firstBit) & (uint8_t)(0xffu >> (7u - lastBit)));
-		for(sx = sx0; sx < sx1; sx++)
-		{
-			Renderer_maskedPageWrite(&sBuffer[(uint16_t)sx + ((uint16_t)page * WOLF3D_SBUFFER_WIDTH)], mask, colour);
-		}
-		y = (uint8_t)(pageLast + 1);
-	}
-#else
-	Renderer_fillRectFast(x, y, w, h, colour);
-#endif
-}
-
-static inline void Renderer_fillMapCellFast(uint8_t x, uint8_t y, uint8_t scale, uint8_t colour)
-{
-	Renderer_fillRectPageFast(x, y, scale, scale, colour);
-}
-
 static inline uint8_t Renderer_xorStippleColour(uint8_t x, uint8_t y)
 {
 	return ((x ^ y) & 1) ? 0 : 1;
@@ -182,81 +82,31 @@ static inline uint8_t Renderer_andStippleColour(uint8_t x, uint8_t y)
 	return ((x & y) & 1) ? 1 : 0;
 }
 
-#if WOLF3D_FAST_WALL_COLOUR_LUT
-/*
- * 16-byte SRAM lookup: index = texel*4 + xParity*2 + yParity.
- * This removes a per-pixel switch from the wall-strip inner loop.
- */
-static const uint8_t Renderer_wallLogicalColourLut[32] =
+static inline void Renderer_writeWallTexPixelFast(uint8_t x, uint8_t y, uint8_t texData)
 {
-#if WOLF3D_WALL_GRAY_STIPPLE
-	/* Horizontal wall sides, matching original WolfenduinoFX drawStrip(). */
-	0, 0, 0, 1,	/* texel 0: dark stipple, (x & y) */
-	0, 0, 0, 0,	/* texel 1: black */
-	1, 1, 1, 1,	/* texel 2: white */
-	1, 0, 0, 1,	/* texel 3: xor stipple */
-	/* Vertical wall sides, matching original WolfenduinoFX drawStrip(). */
-	1, 0, 0, 1,	/* texel 0: xor stipple */
-	1, 0, 0, 0,	/* texel 1: sparse white, !(x | y) */
-	1, 1, 1, 1,	/* texel 2: white */
-	1, 1, 1, 0	/* texel 3: mostly white, !(x & y) */
-#else
-	0, 0, 0, 0,
-	0, 0, 0, 0,
-	1, 1, 1, 1,
-	1, 1, 1, 1,
-	0, 0, 0, 0,
-	0, 0, 0, 0,
-	1, 1, 1, 1,
-	1, 1, 1, 1
-#endif
-};
-#endif
-
-static inline uint8_t Renderer_wallTexColourFast(uint8_t xParity, uint8_t yParity, uint8_t texData, uint8_t verticalWall)
-{
-#if WOLF3D_FAST_WALL_COLOUR_LUT
-	return Renderer_wallLogicalColourLut[((verticalWall & 1) << 4) | ((texData & 3) << 2) | (xParity << 1) | yParity];
-#else
 	switch(texData)
 	{
 	case 1:
-#if WOLF3D_WALL_GRAY_STIPPLE && WOLF3D_WALL_SIDE_STIPPLE
-		if(verticalWall)
-		{
-			return (xParity | yParity) ? 0 : 1;
-		}
-#endif
-		return 0;
+		Renderer_writePixelFast(x, y, 0);
+		break;
 	case 2:
-		return 1;
+		Renderer_writePixelFast(x, y, 1);
+		break;
 	case 0:
 #if WOLF3D_WALL_GRAY_STIPPLE
-#if WOLF3D_WALL_SIDE_STIPPLE
-		return verticalWall ? ((xParity ^ yParity) ? 0 : 1) : ((xParity & yParity) ? 1 : 0);
+		Renderer_writePixelFast(x, y, Renderer_xorStippleColour(x, y));
 #else
-		return (xParity ^ yParity) ? 0 : 1;
+		Renderer_writePixelFast(x, y, 0);
 #endif
-#else
-		return 0;
-#endif
-	default:
+		break;
+	case 3:
 #if WOLF3D_WALL_GRAY_STIPPLE
-#if WOLF3D_WALL_SIDE_STIPPLE
-		return verticalWall ? ((xParity & yParity) ? 0 : 1) : ((xParity ^ yParity) ? 0 : 1);
+		Renderer_writePixelFast(x, y, Renderer_andStippleColour(x, y));
 #else
-		return (xParity & yParity) ? 1 : 0;
+		Renderer_writePixelFast(x, y, 1);
 #endif
-#else
-		return 1;
-#endif
+		break;
 	}
-#endif
-}
-
-static inline void Renderer_writeWallTexPixelFast(uint8_t x, uint8_t y, uint8_t texData, uint8_t verticalWall)
-{
-	Renderer_writePixelFast(x, y, Renderer_wallTexColourFast((uint8_t)(x & 1), (uint8_t)(y & 1), texData, verticalWall));
 }
 
 static inline void Renderer_writeSpriteTexPixelFast(uint8_t x, uint8_t y, uint8_t texData)
@@ -297,8 +147,11 @@ static inline void Renderer_writeWeaponTexPixelFast(int16_t x, int16_t y, uint8_
 		Renderer_writePixelFast((uint8_t)x, (uint8_t)y, 0);
 		break;
 	case 3:
-	default:
-		/* Match the original Arduboy weapon path: gray weapon texels are transparent. */
+#if WOLF3D_SPRITE_GRAY_STIPPLE
+		Renderer_writePixelFast((uint8_t)x, (uint8_t)y, Renderer_xorStippleColour((uint8_t)x, (uint8_t)y));
+#else
+		Renderer_writePixelFast((uint8_t)x, (uint8_t)y, 0);
+#endif
 		break;
 	}
 }
@@ -362,63 +215,9 @@ static inline void Renderer_advanceWallInterpolation(int16_t dx, int16_t dw, int
 	}
 }
 
-static inline void Renderer_storeWallColumn(Renderer* self, uint8_t x, uint8_t drawW, int8_t u, uint8_t textureId)
-{
-	if(drawW == 0 || drawW <= self->wbuffer[x])
-	{
-		return;
-	}
-
-	self->wbuffer[x] = drawW;
-
-#ifdef DEFER_RENDER
-	self->ubuffer[x] = u;
-	self->texbuffer[x] = textureId;
-#if WOLF3D_FAST_DEFERRED_WALL_BOUNDS
-	if(x < self->wallFirstX)
-	{
-		self->wallFirstX = x;
-	}
-	if(x > self->wallLastX)
-	{
-		self->wallLastX = x;
-	}
-#endif
-#else
-	Renderer_drawStrip(self, x, drawW, u, textureId);
-#endif
-}
-
-static inline void Renderer_drawVisibleWallSide(Renderer* self, int8_t testX, int8_t testZ, int16_t x1, int16_t z1, int16_t x2, int16_t z2, uint8_t textureId)
-{
-#if WOLF3D_FAST_NEIGHBOR_TILE_READS
-	uint8_t neighborTile = Map_getTile(&engine.map, testX, testZ);
-	if(Map_tileIsDoor(neighborTile))
-	{
-		Renderer_drawWall(self, x1, z1, x2, z2, DOOR_FRAME_TEXTURE);
-	}
-	else if(!Map_tileIsWall(neighborTile))
-	{
-		Renderer_drawWall(self, x1, z1, x2, z2, textureId);
-	}
-#else
-	if(Map_isDoor(&engine.map, testX, testZ))
-	{
-		Renderer_drawWall(self, x1, z1, x2, z2, DOOR_FRAME_TEXTURE);
-	}
-	else if(!Map_isSolid(&engine.map, testX, testZ))
-	{
-		Renderer_drawWall(self, x1, z1, x2, z2, textureId);
-	}
-#endif
-}
-
-
 
 void Renderer_init(Renderer* self){
 	self->damageIndicator = 0;
-	self->hudHealthFlash = 0;
-	self->hudAmmoFlash = 0;
 	self->renderQueueHead = NULL_QUEUE_ITEM;
 	Renderer_initWBuffer(self);
 #ifdef DEFER_RENDER
@@ -444,227 +243,44 @@ void Renderer_drawDamage(Renderer* self){
 		drawVerticalSpan(DISPLAYWIDTH - 1, 0, DISPLAYHEIGHT - 1, 1);
 	}
 }
-static void Renderer_drawGlyphColour(Renderer* self, char glyph, uint8_t x, uint8_t y, uint8_t fg, uint8_t bg)
-{
-	const uint8_t* ptr = Data_font + glyph * FONT_GLYPH_BYTE_SIZE;
-	uint8_t readMask = 1;
-	uint8_t read = pgm_read_byte(ptr++);
-
-	for(uint8_t i = 0; i < FONT_WIDTH; i++)
-	{
-		for(uint8_t j = 0; j < FONT_HEIGHT; j++)
-		{
-			uint8_t colour = (read & readMask) ? fg : bg;
-			Renderer_writePixelFastClipped((int16_t)x + i, (int16_t)y + j, colour);
-			readMask <<= 1;
-			if(readMask == 0)
-			{
-				readMask = 1;
-				read = pgm_read_byte(ptr++);
-			}
-		}
-	}
-	for(uint8_t j = 0; j < FONT_HEIGHT; j++)
-	{
-		Renderer_writePixelFastClipped((int16_t)x + FONT_WIDTH, (int16_t)y + j, bg);
-	}
-}
-
-static void Renderer_drawIntColour(Renderer* self, int8_t val, uint8_t x, uint8_t y, uint8_t fg, uint8_t bg)
-{
-	for(uint8_t i = 0; i < 3; i++)
-	{
-		uint8_t c = val % 10;
-		if(val > 0 || i == 0)
-		{
-			Renderer_drawGlyphColour(self, c + '0' - FIRST_FONT_GLYPH, x, y, fg, bg);
-		}
-		else
-		{
-			Renderer_drawGlyphColour(self, ' ' - FIRST_FONT_GLYPH, x, y, fg, bg);
-		}
-		x -= FONT_WIDTH + 1;
-		val = val / 10;
-	}
-}
-
 void Renderer_drawHud(Renderer* self){
 	uint8_t hudHeight = DISPLAYHEIGHT - FONT_HEIGHT;
-	uint8_t healthFg = WOLF3D_FONT_FOREGROUND_COLOUR;
-	uint8_t healthBg = WOLF3D_FONT_BACKGROUND_COLOUR;
-	uint8_t ammoFg = WOLF3D_FONT_FOREGROUND_COLOUR;
-	uint8_t ammoBg = WOLF3D_FONT_BACKGROUND_COLOUR;
-
-	if(self->hudHealthFlash > 0)
-	{
-		if(self->hudHealthFlash & 2)
-		{
-			healthFg = WOLF3D_FONT_BACKGROUND_COLOUR;
-			healthBg = WOLF3D_FONT_FOREGROUND_COLOUR;
-		}
-		self->hudHealthFlash--;
-	}
-	if(self->hudAmmoFlash > 0)
-	{
-		if(self->hudAmmoFlash & 2)
-		{
-			ammoFg = WOLF3D_FONT_BACKGROUND_COLOUR;
-			ammoBg = WOLF3D_FONT_FOREGROUND_COLOUR;
-		}
-		self->hudAmmoFlash--;
-	}
-
-	Renderer_drawGlyphColour(self, '+' - FIRST_FONT_GLYPH, 0, hudHeight, healthFg, healthBg);
-	Renderer_drawIntColour(self, engine.player.hp, (FONT_WIDTH + 1) * 3, hudHeight, healthFg, healthBg);
-	Renderer_drawGlyphColour(self, '*' - FIRST_FONT_GLYPH, DISPLAYWIDTH - (FONT_WIDTH + 1) * 4, hudHeight, ammoFg, ammoBg);
-	Renderer_drawIntColour(self, engine.player.weapon.ammo, DISPLAYWIDTH - (FONT_WIDTH + 1), hudHeight, ammoFg, ammoBg);
+	Renderer_drawGlyph(self, '+' - FIRST_FONT_GLYPH, 0, hudHeight);
+	Renderer_drawInt(self, engine.player.hp, (FONT_WIDTH + 1) * 3, hudHeight);
+	Renderer_drawGlyph(self, '*' - FIRST_FONT_GLYPH, DISPLAYWIDTH - (FONT_WIDTH + 1) * 4, hudHeight);
+	Renderer_drawInt(self, engine.player.weapon.ammo, DISPLAYWIDTH - (FONT_WIDTH + 1), hudHeight);
 }
-
-#if WOLF3D_MAP_PLAYER_ARROW
-static void Renderer_drawLineClipped(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint8_t colour)
-{
-	int16_t dx = mabs(x1 - x0);
-	int16_t sx = x0 < x1 ? 1 : -1;
-	int16_t dy = -mabs(y1 - y0);
-	int16_t sy = y0 < y1 ? 1 : -1;
-	int16_t err = dx + dy;
-
-	for(;;)
-	{
-		Renderer_writePixelFastClipped(x0, y0, colour);
-		if(x0 == x1 && y0 == y1)
-		{
-			break;
-		}
-		int16_t e2 = err << 1;
-		if(e2 >= dy)
-		{
-			err += dy;
-			x0 += sx;
-		}
-		if(e2 <= dx)
-		{
-			err += dx;
-			y0 += sy;
-		}
-	}
-}
-
-static void Renderer_drawMapPlayerArrow(int16_t centerX, int16_t centerY, uint8_t scale)
-{
-	int16_t dirX = FixedMath_Cos(engine.player.direction);
-	int16_t dirY = FixedMath_Sin(engine.player.direction);
-	int16_t len = WOLF3D_MAP_ARROW_LEN_BASE + ((int16_t)scale * WOLF3D_MAP_ARROW_LEN_SCALE);
-	int16_t wing = (int16_t)scale / WOLF3D_MAP_ARROW_WING_DIV;
-
-	if(wing < WOLF3D_MAP_ARROW_WING_MIN)
-	{
-		wing = WOLF3D_MAP_ARROW_WING_MIN;
-	}
-	if(len > WOLF3D_MAP_ARROW_LEN_MAX)
-	{
-		len = WOLF3D_MAP_ARROW_LEN_MAX;
-	}
-
-	int16_t tipX = centerX + ((dirX * len) >> FIXED_SHIFT);
-	int16_t tipY = centerY + ((dirY * len) >> FIXED_SHIFT);
-	int16_t tailX = centerX - ((dirX * (len >> 1)) >> FIXED_SHIFT);
-	int16_t tailY = centerY - ((dirY * (len >> 1)) >> FIXED_SHIFT);
-	int16_t leftX = tailX + ((-dirY * wing) >> FIXED_SHIFT);
-	int16_t leftY = tailY + (( dirX * wing) >> FIXED_SHIFT);
-	int16_t rightX = tailX - ((-dirY * wing) >> FIXED_SHIFT);
-	int16_t rightY = tailY - (( dirX * wing) >> FIXED_SHIFT);
-
-	Renderer_drawLineClipped(tipX, tipY, leftX, leftY, WOLF3D_FONT_FOREGROUND_COLOUR);
-	Renderer_drawLineClipped(tipX, tipY, rightX, rightY, WOLF3D_FONT_FOREGROUND_COLOUR);
-}
-#endif
 void Renderer_drawMap(Renderer* self){
 	(void)self;
-	uint8_t scale = engine.mapZoom;
-	uint8_t visibleX;
-	uint8_t visibleZ;
-	uint8_t mapX;
-	uint8_t mapY;
+	uint8_t mapX = WOLF3D_MAP_X;
+	uint8_t mapY = WOLF3D_MAP_Y;
+	uint8_t scale = WOLF3D_MAP_SCALE;
+	uint8_t mapW = (MAP_BUFFER_SIZE * WOLF3D_MAP_SCALE) + 2;
+	uint8_t mapH = (MAP_BUFFER_SIZE * WOLF3D_MAP_SCALE) + 2;
 	int8_t playerCellX = WORLD_TO_CELL(engine.player.x);
 	int8_t playerCellZ = WORLD_TO_CELL(engine.player.z);
-	int8_t startX;
-	int8_t startZ;
+	uint8_t px = 0;
+	uint8_t pz = 0;
 
-	if(scale < WOLF3D_MAP_MIN_SCALE)
+	Renderer_fillRectFast(mapX, mapY, mapW, mapH, WOLF3D_FONT_BACKGROUND_COLOUR);
+	for(uint8_t x = 0; x < mapW; x++)
 	{
-		scale = WOLF3D_MAP_MIN_SCALE;
+		Renderer_writePixelFastClipped((int16_t)mapX + x, mapY, WOLF3D_FONT_FOREGROUND_COLOUR);
+		Renderer_writePixelFastClipped((int16_t)mapX + x, (int16_t)mapY + mapH - 1, WOLF3D_FONT_FOREGROUND_COLOUR);
 	}
-	if(scale > WOLF3D_MAP_MAX_SCALE)
+	for(uint8_t y = 0; y < mapH; y++)
 	{
-		scale = WOLF3D_MAP_MAX_SCALE;
+		Renderer_writePixelFastClipped(mapX, (int16_t)mapY + y, WOLF3D_FONT_FOREGROUND_COLOUR);
+		Renderer_writePixelFastClipped((int16_t)mapX + mapW - 1, (int16_t)mapY + y, WOLF3D_FONT_FOREGROUND_COLOUR);
 	}
 
-#if WOLF3D_MAP_DEDICATED_SCREEN
-	visibleX = DISPLAYWIDTH / scale;
-	visibleZ = DISPLAYHEIGHT / scale;
-	if(visibleX > MAP_SIZE)
+	for(uint8_t z = 0; z < MAP_BUFFER_SIZE; z++)
 	{
-		visibleX = MAP_SIZE;
-	}
-	if(visibleZ > MAP_SIZE)
-	{
-		visibleZ = MAP_SIZE;
-	}
-	startX = playerCellX - (int8_t)(visibleX / 2);
-	startZ = playerCellZ - (int8_t)(visibleZ / 2);
-	if(startX < 0)
-	{
-		startX = 0;
-	}
-	if(startZ < 0)
-	{
-		startZ = 0;
-	}
-	if(startX > MAP_SIZE - visibleX)
-	{
-		startX = MAP_SIZE - visibleX;
-	}
-	if(startZ > MAP_SIZE - visibleZ)
-	{
-		startZ = MAP_SIZE - visibleZ;
-	}
-	mapX = (uint8_t)((DISPLAYWIDTH - (visibleX * scale)) / 2);
-	mapY = (uint8_t)((DISPLAYHEIGHT - (visibleZ * scale)) / 2);
-#else
-	visibleX = MAP_BUFFER_SIZE;
-	visibleZ = MAP_BUFFER_SIZE;
-	startX = engine.map.bufferX;
-	startZ = engine.map.bufferZ;
-	mapX = WOLF3D_MAP_X;
-	mapY = WOLF3D_MAP_Y;
-#endif
-
-	#if !WOLF3D_MAP_DEDICATED_SCREEN
-	Renderer_fillRectFast(mapX, mapY, (uint8_t)(visibleX * scale), (uint8_t)(visibleZ * scale), WOLF3D_FONT_BACKGROUND_COLOUR);
-#endif
-
-	for(uint8_t z = 0; z < visibleZ; z++)
-	{
-		for(uint8_t x = 0; x < visibleX; x++)
+		for(uint8_t x = 0; x < MAP_BUFFER_SIZE; x++)
 		{
-			int8_t cellX = startX + x;
-			int8_t cellZ = startZ + z;
-#if WOLF3D_MAP_DEDICATED_SCREEN
-			uint8_t tile = Map_readRawTile(&engine.map, cellX, cellZ);
-#else
+			int8_t cellX = engine.map.bufferX + x;
+			int8_t cellZ = engine.map.bufferZ + z;
 			uint8_t tile = Map_getTile(&engine.map, cellX, cellZ);
-#endif
-#if WOLF3D_SEEN_WALL_BITSET && WOLF3D_MAP_ONLY_SEEN_WALLS
-			if(!Map_isWallSeen(&engine.map, cellX, cellZ))
-			{
-				tile = Tile_Empty;
-			}
-			else if((tile >= Tile_FirstActor && tile <= Tile_LastActor) || (tile >= Tile_FirstItem && tile <= Tile_LastItem))
-			{
-				tile = Tile_Empty;
-			}
-#endif
 			uint8_t colour = WOLF3D_FONT_BACKGROUND_COLOUR;
 
 			if(tile >= Tile_FirstWall && tile <= Tile_LastWall)
@@ -675,96 +291,21 @@ void Renderer_drawMap(Renderer* self){
 			{
 				colour = ((x ^ z) & 1) ? WOLF3D_FONT_FOREGROUND_COLOUR : WOLF3D_FONT_BACKGROUND_COLOUR;
 			}
-			else if(tile == Tile_SecretPushWall || (tile >= Tile_FirstBlockingDecoration && tile <= Tile_LastBlockingDecoration))
-			{
-				colour = ((x ^ z) & 1) ? WOLF3D_FONT_FOREGROUND_COLOUR : WOLF3D_FONT_BACKGROUND_COLOUR;
-			}
-			else if((tile >= Tile_FirstActor && tile <= Tile_LastActor) || (tile >= Tile_FirstItem && tile <= Tile_LastItem))
-			{
-				colour = ((x + z) & 1) ? WOLF3D_FONT_FOREGROUND_COLOUR : WOLF3D_FONT_BACKGROUND_COLOUR;
-			}
 
-			if(scale == 1)
+			Renderer_fillRectFast((uint8_t)(mapX + 1 + (x * scale)), (uint8_t)(mapY + 1 + (z * scale)), scale, scale, colour);
+
+			if(cellX == playerCellX && cellZ == playerCellZ)
 			{
-				Renderer_writePixelFast((uint8_t)(mapX + x), (uint8_t)(mapY + z), colour);
-			}
-			else
-			{
-				if(colour != WOLF3D_FONT_BACKGROUND_COLOUR)
-				{
-					Renderer_fillMapCellFast((uint8_t)(mapX + (x * scale)), (uint8_t)(mapY + (z * scale)), scale, colour);
-				}
+				px = x;
+				pz = z;
 			}
 		}
 	}
 
-	for(uint8_t n = 0; n < MAX_DOORS; n++)
-	{
-		Door* door = &engine.map.doors[n];
-		if(door->type != DoorType_None && door->x >= startX && door->z >= startZ && door->x < startX + visibleX && door->z < startZ + visibleZ)
-		{
-#if WOLF3D_SEEN_WALL_BITSET && WOLF3D_MAP_ONLY_SEEN_WALLS
-			if(!Map_isWallSeen(&engine.map, door->x, door->z))
-			{
-				continue;
-			}
-#endif
-			uint8_t x = (uint8_t)(door->x - startX);
-			uint8_t z = (uint8_t)(door->z - startZ);
-			uint8_t colour = ((x ^ z) & 1) ? WOLF3D_FONT_FOREGROUND_COLOUR : WOLF3D_FONT_BACKGROUND_COLOUR;
-			if(scale == 1)
-			{
-				Renderer_writePixelFast((uint8_t)(mapX + x), (uint8_t)(mapY + z), colour);
-			}
-			else
-			{
-				if(colour != WOLF3D_FONT_BACKGROUND_COLOUR)
-				{
-					Renderer_fillMapCellFast((uint8_t)(mapX + (x * scale)), (uint8_t)(mapY + (z * scale)), scale, colour);
-				}
-			}
-		}
-	}
-
-#if WOLF3D_MAP_SHOW_ACTORS
-	for(uint8_t n = 0; n < MAX_ACTIVE_ACTORS; n++)
-	{
-		Actor* actor = &engine.actors[n];
-		if(actor->type != ActorType_Empty && actor->hp > 0)
-		{
-			int8_t cellX = WORLD_TO_CELL(actor->x);
-			int8_t cellZ = WORLD_TO_CELL(actor->z);
-			if(cellX >= startX && cellZ >= startZ && cellX < startX + visibleX && cellZ < startZ + visibleZ)
-			{
-				uint8_t x = (uint8_t)(cellX - startX);
-				uint8_t z = (uint8_t)(cellZ - startZ);
-				if(scale == 1)
-				{
-					Renderer_writePixelFast((uint8_t)(mapX + x), (uint8_t)(mapY + z), WOLF3D_FONT_FOREGROUND_COLOUR);
-				}
-				else
-				{
-					Renderer_fillMapCellFast((uint8_t)(mapX + (x * scale)), (uint8_t)(mapY + (z * scale)), scale, WOLF3D_FONT_FOREGROUND_COLOUR);
-					Renderer_writePixelFastClipped((int16_t)(mapX + (x * scale)) + 1, (int16_t)(mapY + (z * scale)) + 1, WOLF3D_FONT_BACKGROUND_COLOUR);
-				}
-			}
-		}
-	}
-#endif
-
-	if(playerCellX >= startX && playerCellZ >= startZ && playerCellX < startX + visibleX && playerCellZ < startZ + visibleZ)
-	{
-		int16_t localWorldX = engine.player.x - CELL_TO_WORLD(startX);
-		int16_t localWorldZ = engine.player.z - CELL_TO_WORLD(startZ);
-		int16_t screenX = (int16_t)mapX + ((localWorldX * scale) >> CELL_SIZE_SHIFT);
-		int16_t screenY = (int16_t)mapY + ((localWorldZ * scale) >> CELL_SIZE_SHIFT);
-
-#if WOLF3D_MAP_PLAYER_ARROW
-		Renderer_drawMapPlayerArrow(screenX, screenY, scale);
-#else
-		Renderer_writePixelFastClipped(screenX, screenY, WOLF3D_FONT_FOREGROUND_COLOUR);
-#endif
-	}
+	uint8_t playerX = (uint8_t)(mapX + 1 + (px * scale));
+	uint8_t playerY = (uint8_t)(mapY + 1 + (pz * scale));
+	Renderer_fillRectFast(playerX, playerY, scale, scale, WOLF3D_FONT_FOREGROUND_COLOUR);
+	Renderer_writePixelFastClipped((int16_t)playerX + 1, (int16_t)playerY + 1, WOLF3D_FONT_BACKGROUND_COLOUR);
 }
 void Renderer_drawWeapon(Renderer* self){
 	uint8_t frameIndex = engine.player.weapon.frame;
@@ -778,12 +319,9 @@ void Renderer_drawWeapon(Renderer* self){
 		data = Data_knifeSprite;
 		break;
 	case WeaponType_MachineGun:
-		frame = &Data_machinegunSprite_frames[frameIndex > 3 ? 3 : frameIndex];
-		data = Data_machinegunSprite;
-		break;
 	case WeaponType_ChainGun:
-		frame = &Data_chaingunSprite_frames[frameIndex > 3 ? 3 : frameIndex];
-		data = Data_chaingunSprite;
+		frame = &Data_machinegunSprite_frames[frameIndex > 2 ? 2 : frameIndex];
+		data = Data_machinegunSprite;
 		break;
 	case WeaponType_Pistol:
 	default:
@@ -794,7 +332,7 @@ void Renderer_drawWeapon(Renderer* self){
 	BitPairReader_init(&reader, data, pgm_read_word(&frame->offset));
 	uint8_t frameWidth = pgm_read_byte(&frame->width);
 	uint8_t frameHeight = pgm_read_byte(&frame->height);
-	int16_t x = (int16_t)HALF_DISPLAYWIDTH - 32 + pgm_read_byte(&frame->xOffset);
+	uint8_t x = HALF_DISPLAYWIDTH - 8 + pgm_read_byte(&frame->xOffset);
 
 	for(int8_t i = 0; i < frameWidth; i++)
 	{
@@ -805,47 +343,6 @@ void Renderer_drawWeapon(Renderer* self){
 		}
 	}
 }
-static void Renderer_updateViewFromPlayer(Renderer* self)
-{
-	self->view.x = engine.player.x;
-	self->view.z = engine.player.z;
-	self->view.rotCos = FixedMath_Cos(-engine.player.direction);
-	self->view.rotSin = FixedMath_Sin(-engine.player.direction);
-	self->view.clipCos = FixedMath_Cos(-engine.player.direction + DEGREES_90 / 2);
-	self->view.clipSin = FixedMath_Sin(-engine.player.direction + DEGREES_90 / 2);
-	self->view.cellX = WORLD_TO_CELL(engine.player.x);
-	self->view.cellZ = WORLD_TO_CELL(engine.player.z);
-}
-
-#if WOLF3D_SEEN_WALL_BITSET
-void Renderer_updateSeenWalls(Renderer* self)
-{
-	Renderer_updateViewFromPlayer(self);
-	for(int8_t z = engine.map.bufferZ; z < engine.map.bufferZ + MAP_BUFFER_SIZE; z++)
-	{
-		for(int8_t x = engine.map.bufferX; x < engine.map.bufferX + MAP_BUFFER_SIZE; x++)
-		{
-			uint8_t tile = Map_getTileFast(&engine.map, x, z);
-			if(tile == 0)
-			{
-				continue;
-			}
-			if(Renderer_isFrustrumClipped(self, x, z))
-			{
-				continue;
-			}
-			if((tile >= Tile_FirstWall && tile <= Tile_LastWall)
-			|| (tile >= Tile_FirstDoor && tile <= Tile_LastDoor)
-			|| tile == Tile_SecretPushWall
-			|| (tile >= Tile_FirstBlockingDecoration && tile <= Tile_LastBlockingDecoration))
-			{
-				Map_markSeenWall(&engine.map, x, z);
-			}
-		}
-	}
-}
-#endif
-
 void Renderer_drawFrame(Renderer* self){
 	self->renderQueueHead = NULL_QUEUE_ITEM;
 	for(int8_t n = 0; n < RENDER_QUEUE_CAPACITY; n++)
@@ -853,7 +350,15 @@ void Renderer_drawFrame(Renderer* self){
 		self->renderQueue[n].data = NULL;
 	}
 
-	Renderer_updateViewFromPlayer(self);
+	self->view.x = engine.player.x;
+	self->view.z = engine.player.z;
+	self->view.rotCos = FixedMath_Cos(-engine.player.direction);
+	self->view.rotSin = FixedMath_Sin(-engine.player.direction);
+	self->view.clipCos = FixedMath_Cos(-engine.player.direction + DEGREES_90 / 2);
+	self->view.clipSin = FixedMath_Sin(-engine.player.direction + DEGREES_90 / 2);
+
+	self->view.cellX = WORLD_TO_CELL(engine.player.x);
+	self->view.cellZ = WORLD_TO_CELL(engine.player.z);
 	Renderer_initWBuffer(self);
 
 #if !defined(DEFER_RENDER)
@@ -938,12 +443,6 @@ void Renderer_drawFrame(Renderer* self){
 
 #ifdef DEFER_RENDER
 void Renderer_drawDeferredFrame(Renderer* self){
-#if WOLF3D_MAP_DEDICATED_SCREEN
-	if(engine.mapVisible)
-	{
-		return;
-	}
-#endif
 	/*
 	 * Restore the original Arduboy-style background pass for deferred rendering.
 	 * The previous Uzebox path only cleared the open space above/below wall
@@ -953,18 +452,6 @@ void Renderer_drawDeferredFrame(Renderer* self){
 	 */
 	Renderer_drawFloorAndCeiling(self);
 
-#if WOLF3D_FAST_DEFERRED_WALL_BOUNDS
-	if(self->wallFirstX < DISPLAYWIDTH)
-	{
-		for(uint8_t x = self->wallFirstX; x <= self->wallLastX; x++)
-		{
-			if(self->wbuffer[x] != 0)
-			{
-				Renderer_drawStrip(self, x, self->wbuffer[x], self->ubuffer[x], self->texbuffer[x]);
-			}
-		}
-	}
-#else
 	for(uint8_t x = 0; x < DISPLAYWIDTH; x++)
 	{
 		if(self->wbuffer[x] != 0)
@@ -972,7 +459,6 @@ void Renderer_drawDeferredFrame(Renderer* self){
 			Renderer_drawStrip(self, x, self->wbuffer[x], self->ubuffer[x], self->texbuffer[x]);
 		}
 	}
-#endif
 
 	for(uint8_t item = self->renderQueueHead; item != NULL_QUEUE_ITEM; item = self->renderQueue[item].next)
 	{
@@ -1043,12 +529,6 @@ void Renderer_drawBufferedCells(Renderer* self){
 }
 void Renderer_initWBuffer(Renderer* self){
 	memset(self->wbuffer, 0, sizeof(self->wbuffer));
-#ifdef DEFER_RENDER
-#if WOLF3D_FAST_DEFERRED_WALL_BOUNDS
-	self->wallFirstX = DISPLAYWIDTH;
-	self->wallLastX = 0;
-#endif
-#endif
 }
 
 #if defined(PLATFORM_GAMEBUINO)
@@ -1097,29 +577,13 @@ void Renderer_drawCell(Renderer* self, int8_t cellX, int8_t cellZ){
 	// HACK: Keep calling update so that sound doesn't slow down. Ugh..
 	;
 #endif
-	/* Most streamed cells are empty.  Read the 16x16 RAM tile cache first so
-	 * empty cells avoid the two fixed-point frustum multiplies. */
+	// clip cells out of frustum self->view
+	if(Renderer_isFrustrumClipped(self, cellX, cellZ))
+		return;
+
 	uint8_t tile = Map_getTileFast(&engine.map, cellX, cellZ);
-	if(tile == 0)
+	if (tile == 0)
 		return;
-
-#if WOLF3D_FAST_TILE_FIRST_RENDER
-	if(Renderer_isFrustrumClipped(self, cellX, cellZ))
-		return;
-#else
-	if(Renderer_isFrustrumClipped(self, cellX, cellZ))
-		return;
-#endif
-
-#if WOLF3D_SEEN_WALL_BITSET
-	if((tile >= Tile_FirstWall && tile <= Tile_LastWall)
-	|| (tile >= Tile_FirstDoor && tile <= Tile_LastDoor)
-	|| tile == Tile_SecretPushWall
-	|| (tile >= Tile_FirstBlockingDecoration && tile <= Tile_LastBlockingDecoration))
-	{
-		Map_markSeenWall(&engine.map, cellX, cellZ);
-	}
-#endif
 
 	int16_t worldX = CELL_TO_WORLD(cellX);
 	int16_t worldZ = CELL_TO_WORLD(cellZ);
@@ -1146,11 +610,25 @@ void Renderer_drawCell(Renderer* self, int8_t cellX, int8_t cellZ){
 				// north west quadrant
 				if (self->view.z < worldZ)
 				{
-					Renderer_drawVisibleWallSide(self, cellX, cellZ - 1, worldX, worldZ, worldX + CELL_SIZE, worldZ, textureId);  // south wall
+					if(Map_isDoor(&engine.map, cellX, cellZ - 1))
+					{
+						Renderer_drawWall(self, worldX, worldZ, worldX + CELL_SIZE, worldZ, DOOR_FRAME_TEXTURE);  // south wall
+					}
+					else if(!Map_isSolid(&engine.map, cellX, cellZ - 1))
+					{
+						Renderer_drawWall(self, worldX, worldZ, worldX + CELL_SIZE, worldZ, textureId);  // south wall
+					}
 				}
 				if (self->view.x > worldX + CELL_SIZE)
 				{
-					Renderer_drawVisibleWallSide(self, cellX + 1, cellZ, worldX + CELL_SIZE, worldZ, worldX + CELL_SIZE, worldZ + CELL_SIZE, textureId);  // east wall
+					if(Map_isDoor(&engine.map, cellX + 1, cellZ))
+					{
+						Renderer_drawWall(self, worldX + CELL_SIZE, worldZ, worldX + CELL_SIZE, worldZ + CELL_SIZE, DOOR_FRAME_TEXTURE);  // east wall
+					}
+					else if(!Map_isSolid(&engine.map, cellX+1, cellZ))
+					{
+						Renderer_drawWall(self, worldX + CELL_SIZE, worldZ, worldX + CELL_SIZE, worldZ + CELL_SIZE, textureId);  // east wall
+					}
 				}
 			}
 			else
@@ -1158,11 +636,25 @@ void Renderer_drawCell(Renderer* self, int8_t cellX, int8_t cellZ){
 				// north east quadrant
 				if (self->view.z < worldZ)
 				{
-					Renderer_drawVisibleWallSide(self, cellX, cellZ - 1, worldX, worldZ, worldX + CELL_SIZE, worldZ, textureId);  // south wall
+					if(Map_isDoor(&engine.map, cellX, cellZ-1))
+					{
+						Renderer_drawWall(self, worldX, worldZ, worldX + CELL_SIZE, worldZ, DOOR_FRAME_TEXTURE);  // south wall
+					}
+					else if(!Map_isSolid(&engine.map, cellX, cellZ-1))
+					{
+						Renderer_drawWall(self, worldX, worldZ, worldX + CELL_SIZE, worldZ, textureId);  // south wall
+					}
 				}
 				if (self->view.x < worldX)
 				{
-					Renderer_drawVisibleWallSide(self, cellX - 1, cellZ, worldX, worldZ + CELL_SIZE, worldX, worldZ, textureId);  // west wall
+					if(Map_isDoor(&engine.map, cellX-1, cellZ))
+					{
+						Renderer_drawWall(self, worldX, worldZ + CELL_SIZE, worldX, worldZ, DOOR_FRAME_TEXTURE);  // west wall
+					}
+					else if(!Map_isSolid(&engine.map, cellX-1, cellZ))
+					{
+						Renderer_drawWall(self, worldX, worldZ + CELL_SIZE, worldX, worldZ, textureId);  // west wall
+					}
 				}
 			}
 		}
@@ -1173,11 +665,25 @@ void Renderer_drawCell(Renderer* self, int8_t cellX, int8_t cellZ){
 				// south west quadrant
 				if (self->view.z > worldZ + CELL_SIZE)
 				{
-					Renderer_drawVisibleWallSide(self, cellX, cellZ + 1, worldX + CELL_SIZE, worldZ + CELL_SIZE, worldX, worldZ + CELL_SIZE, textureId);  // north wall
+					if(Map_isDoor(&engine.map, cellX, cellZ+1))
+					{
+						Renderer_drawWall(self, worldX + CELL_SIZE, worldZ + CELL_SIZE, worldX, worldZ + CELL_SIZE, DOOR_FRAME_TEXTURE);  // north wall
+					}
+					else if(!Map_isSolid(&engine.map, cellX, cellZ+1))
+					{
+						Renderer_drawWall(self, worldX + CELL_SIZE, worldZ + CELL_SIZE, worldX, worldZ + CELL_SIZE, textureId);  // north wall
+					}
 				}
 				if (self->view.x > worldX + CELL_SIZE)
 				{
-					Renderer_drawVisibleWallSide(self, cellX + 1, cellZ, worldX + CELL_SIZE, worldZ, worldX + CELL_SIZE, worldZ + CELL_SIZE, textureId);  // east wall
+					if(Map_isDoor(&engine.map, cellX+1, cellZ))
+					{
+						Renderer_drawWall(self, worldX + CELL_SIZE, worldZ, worldX + CELL_SIZE, worldZ + CELL_SIZE, DOOR_FRAME_TEXTURE);  // east wall
+					}
+					else if(!Map_isSolid(&engine.map, cellX+1, cellZ))
+					{
+						Renderer_drawWall(self, worldX + CELL_SIZE, worldZ, worldX + CELL_SIZE, worldZ + CELL_SIZE, textureId);  // east wall
+					}
 				}
 			}
 			else
@@ -1185,20 +691,33 @@ void Renderer_drawCell(Renderer* self, int8_t cellX, int8_t cellZ){
 				// south east quadrant
 				if (self->view.z > worldZ + CELL_SIZE)
 				{
-					Renderer_drawVisibleWallSide(self, cellX, cellZ + 1, worldX + CELL_SIZE, worldZ + CELL_SIZE, worldX, worldZ + CELL_SIZE, textureId);  // north wall
+					if(Map_isDoor(&engine.map, cellX, cellZ+1))
+					{
+						Renderer_drawWall(self, worldX + CELL_SIZE, worldZ + CELL_SIZE, worldX, worldZ + CELL_SIZE, DOOR_FRAME_TEXTURE);  // north wall
+					}
+					else if(!Map_isSolid(&engine.map, cellX, cellZ+1))
+					{
+						Renderer_drawWall(self, worldX + CELL_SIZE, worldZ + CELL_SIZE, worldX, worldZ + CELL_SIZE, textureId);  // north wall
+					}
 				}
 				if (self->view.x < worldX)
 				{
-					Renderer_drawVisibleWallSide(self, cellX - 1, cellZ, worldX, worldZ + CELL_SIZE, worldX, worldZ, textureId);  // west wall
+					if(Map_isDoor(&engine.map, cellX-1, cellZ))
+					{
+						Renderer_drawWall(self, worldX, worldZ + CELL_SIZE, worldX, worldZ, DOOR_FRAME_TEXTURE);  // west wall
+					}
+					else if(!Map_isSolid(&engine.map, cellX-1, cellZ))
+					{
+						Renderer_drawWall(self, worldX, worldZ + CELL_SIZE, worldX, worldZ, textureId);  // west wall
+					}
 				}
 			}
 		}
 	}
 }
 
-#define FORCE_WALL_STRIP_EDGES WOLF3D_FORCE_WALL_STRIP_EDGES
+#define FORCE_WALL_STRIP_EDGES 1
 
-#if WOLF3D_FAST_UNPACKED_WALL_TEXTURES && WOLF3D_FAST_WALL_V_LOOKUP
 void Renderer_drawStrip(Renderer* self, int16_t x, int16_t w, int8_t u, uint8_t textureId)
 {
 	(void)self;
@@ -1207,159 +726,6 @@ void Renderer_drawStrip(Renderer* self, int16_t x, int16_t w, int8_t u, uint8_t 
 	{
 		return;
 	}
-	uint8_t verticalWall = (uint8_t)((textureId & WOLF3D_WALL_VERTICAL_FLAG) != 0);
-	textureId &= WOLF3D_WALL_TEXTURE_MASK;
-	if(w > 255)
-	{
-		w = 255;
-	}
-	if(textureId >= DATA_WALL_TEXTURE_COUNT)
-	{
-		textureId = 0;
-	}
-	if(u < 0)
-	{
-		u = 0;
-	}
-	else if(u >= TEXTURE_SIZE)
-	{
-		u = TEXTURE_SIZE - 1;
-	}
-
-	int16_t halfW = w >> 1;
-	int16_t y1 = HALF_DISPLAYHEIGHT - halfW;
-	int16_t y2 = HALF_DISPLAYHEIGHT + halfW;
-	int16_t yEnd;
-
-#if FORCE_WALL_STRIP_EDGES
-	yEnd = y2 - 1;
-#else
-	yEnd = y2;
-#endif
-
-	if(yEnd >= 0 && y1 < DISPLAYHEIGHT)
-	{
-		if(y1 < 0)
-		{
-			y1 = 0;
-		}
-		if(yEnd >= DISPLAYHEIGHT)
-		{
-			yEnd = DISPLAYHEIGHT - 1;
-		}
-
-		const uint8_t* vRow = Data_wallVLookup + (((uint16_t)(uint8_t)w) << 6);
-		const uint8_t* texColumn = Data_wallTextureTexels + (((uint16_t)textureId) << 8) + (((uint16_t)(uint8_t)u) << 4);
-
-#if defined(PLATFORM_UZEBOX_MODE23) && WOLF3D_FAST_WALL_PAGE_BLIT
-		{
-			uint8_t sx = (uint8_t)((uint8_t)x + WOLF3D_SBUFFER_X_OFFSET);
-			uint8_t xParity = (uint8_t)x & 1;
-			uint8_t yy = (uint8_t)y1;
-			uint8_t yyEnd = (uint8_t)yEnd;
-
-			while(yy <= yyEnd)
-			{
-				uint8_t sy = (uint8_t)(yy + WOLF3D_SBUFFER_Y_OFFSET);
-				uint8_t page = (uint8_t)(sy >> 3);
-				uint8_t writeMask = 0;
-				uint8_t valueMask = 0;
-				uint8_t pageEnd = (uint8_t)((((uint16_t)page << 3) + 7u) - WOLF3D_SBUFFER_Y_OFFSET);
-
-				if(pageEnd > yyEnd)
-				{
-					pageEnd = yyEnd;
-				}
-
-				for(;;)
-				{
-					uint8_t bit = (uint8_t)(1u << (((uint8_t)(yy + WOLF3D_SBUFFER_Y_OFFSET)) & 7));
-					uint8_t v = pgm_read_byte(vRow + yy);
-					uint8_t texData = pgm_read_byte(texColumn + v);
-					uint8_t colour = Renderer_wallTexColourFast(xParity, (uint8_t)(yy & 1), texData, verticalWall);
-
-					writeMask |= bit;
-					if(Renderer_physicalColour(colour))
-					{
-						valueMask |= bit;
-					}
-
-					if(yy == pageEnd)
-					{
-						break;
-					}
-					yy++;
-				}
-
-				Renderer_mergePageByte(&sBuffer[(uint16_t)sx + ((uint16_t)page * WOLF3D_SBUFFER_WIDTH)], writeMask, valueMask);
-				if(yy == yyEnd)
-				{
-					break;
-				}
-				yy++;
-			}
-		}
-#elif defined(PLATFORM_UZEBOX_MODE23) && WOLF3D_FAST_COLUMN_PIXEL_WRITER
-		{
-			uint8_t sx = (uint8_t)((uint8_t)x + WOLF3D_SBUFFER_X_OFFSET);
-			uint8_t sy = (uint8_t)((uint8_t)y1 + WOLF3D_SBUFFER_Y_OFFSET);
-			uint8_t* dst = &sBuffer[(uint16_t)sx + (((uint16_t)sy >> 3) * WOLF3D_SBUFFER_WIDTH)];
-			uint8_t mask = (uint8_t)(1u << (sy & 7));
-			uint8_t xParity = (uint8_t)x & 1;
-			uint8_t yParity = (uint8_t)y1 & 1;
-
-			uint8_t yy = (uint8_t)y1;
-			uint8_t yyEnd = (uint8_t)yEnd;
-			for(;;)
-			{
-				uint8_t v = pgm_read_byte(vRow + yy);
-				uint8_t texData = pgm_read_byte(texColumn + v);
-				uint8_t colour = Renderer_wallTexColourFast(xParity, yParity, texData, verticalWall);
-
-				Renderer_writeColumnPixelPtrFast(&dst, &mask, colour);
-				if(yy == yyEnd)
-				{
-					break;
-				}
-				yy++;
-				yParity ^= 1;
-			}
-		}
-#else
-		uint8_t yy = (uint8_t)y1;
-		uint8_t yyEnd = (uint8_t)yEnd;
-		for(;;)
-		{
-			uint8_t v = pgm_read_byte(vRow + yy);
-			uint8_t texData = pgm_read_byte(texColumn + v);
-			Renderer_writeWallTexPixelFast((uint8_t)x, yy, texData, verticalWall);
-			if(yy == yyEnd)
-			{
-				break;
-			}
-			yy++;
-		}
-#endif
-	}
-
-#if FORCE_WALL_STRIP_EDGES
-	if(y2 >= 0 && y2 < DISPLAYHEIGHT)
-	{
-		Renderer_writePixelFast((uint8_t)x, (uint8_t)y2, 1);
-	}
-#endif
-}
-#else
-void Renderer_drawStrip(Renderer* self, int16_t x, int16_t w, int8_t u, uint8_t textureId)
-{
-	(void)self;
-
-	if(w <= 0 || x < 0 || x >= DISPLAYWIDTH)
-	{
-		return;
-	}
-	uint8_t verticalWall = (uint8_t)((textureId & WOLF3D_WALL_VERTICAL_FLAG) != 0);
-	textureId &= WOLF3D_WALL_TEXTURE_MASK;
 
 	int16_t halfW = w >> 1;
 	int16_t y1 = HALF_DISPLAYHEIGHT - halfW;
@@ -1399,34 +765,9 @@ void Renderer_drawStrip(Renderer* self, int16_t x, int16_t w, int8_t u, uint8_t 
 			yEnd = DISPLAYHEIGHT - 1;
 		}
 
-#if defined(PLATFORM_UZEBOX_MODE23) && WOLF3D_FAST_COLUMN_PIXEL_WRITER
-		{
-			uint8_t sx = (uint8_t)((uint8_t)x + WOLF3D_SBUFFER_X_OFFSET);
-			uint8_t sy = (uint8_t)((uint8_t)y1 + WOLF3D_SBUFFER_Y_OFFSET);
-			uint8_t* dst = &sBuffer[(uint16_t)sx + (((uint16_t)sy >> 3) * WOLF3D_SBUFFER_WIDTH)];
-			uint8_t mask = (uint8_t)(1u << (sy & 7));
-			uint8_t xParity = (uint8_t)x & 1;
-			uint8_t yParity = (uint8_t)y1 & 1;
-
-			for(int16_t y = y1; y <= yEnd; y++)
-			{
-				uint8_t colour = Renderer_wallTexColourFast(xParity, yParity, texData, verticalWall);
-
-				Renderer_writeColumnPixelPtrFast(&dst, &mask, colour);
-				yParity ^= 1;
-
-				verror -= 15;
-				while(verror < 0)
-				{
-					texData = BitPairReader_readFast(&textureReader);
-					verror += w;
-				}
-			}
-		}
-#else
 		for(int16_t y = y1; y <= yEnd; y++)
 		{
-			Renderer_writeWallTexPixelFast((uint8_t)x, (uint8_t)y, texData, verticalWall);
+			Renderer_writeWallTexPixelFast((uint8_t)x, (uint8_t)y, texData);
 
 			verror -= 15;
 			while(verror < 0)
@@ -1435,14 +776,13 @@ void Renderer_drawStrip(Renderer* self, int16_t x, int16_t w, int8_t u, uint8_t 
 				verror += w;
 			}
 		}
-#endif
 	}
 #else
 	for(int16_t y = y1; y <= yEnd; y++)
 	{
 		if(y >= 0 && y < DISPLAYHEIGHT)
 		{
-			Renderer_writeWallTexPixelFast((uint8_t)x, (uint8_t)y, texData, verticalWall);
+			Renderer_writeWallTexPixelFast((uint8_t)x, (uint8_t)y, texData);
 		}
 
 		verror -= 15;
@@ -1461,8 +801,6 @@ void Renderer_drawStrip(Renderer* self, int16_t x, int16_t w, int8_t u, uint8_t 
 	}
 #endif
 }
-
-#endif
 
 #ifdef PERSPECTIVE_CORRECT_TEXTURE_MAPPING
 // draws one side of a cell
@@ -1550,17 +888,6 @@ void Renderer_drawWall_impl(Renderer* self, int16_t _x1, int16_t _z1, int16_t _x
 		ustep = -1;
 	}
 
-
-#if WOLF3D_WALL_SIDE_STIPPLE
-	uint8_t storedTextureId = textureId;
-	if(_x1 == _x2)
-	{
-		storedTextureId |= WOLF3D_WALL_VERTICAL_FLAG;
-	}
-#else
-	uint8_t storedTextureId = textureId;
-#endif
-
 	for(int x = sx1; x < firstx; x++)
 	{
 		Renderer_advanceWallInterpolation(dx, dw, wstep, &w, &werror, du, ustep, &u, &uerror);
@@ -1569,7 +896,17 @@ void Renderer_drawWall_impl(Renderer* self, int16_t _x1, int16_t _z1, int16_t _x
 	for(int x = firstx; x <= lastx; x++)
 	{
 		uint8_t drawW = Renderer_clampWallWidth(w);
-		Renderer_storeWallColumn(self, (uint8_t)x, drawW, u, storedTextureId);
+		if(drawW > self->wbuffer[x])
+		{
+			self->wbuffer[x] = drawW;
+
+#ifdef DEFER_RENDER
+			self->ubuffer[x] = u;
+			self->texbuffer[x] = textureId;
+#else
+			Renderer_drawStrip(self, x, drawW, u, textureId);
+#endif
+		}
 
 		Renderer_advanceWallInterpolation(dx, dw, wstep, &w, &werror, du, ustep, &u, &uerror);
 	}
@@ -1644,17 +981,6 @@ void Renderer_drawWall_impl(Renderer* self, int16_t _x1, int16_t _z1, int16_t _x
 		ustep = -1;
 	}
 
-
-#if WOLF3D_WALL_SIDE_STIPPLE
-	uint8_t storedTextureId = textureId;
-	if(_x1 == _x2)
-	{
-		storedTextureId |= WOLF3D_WALL_VERTICAL_FLAG;
-	}
-#else
-	uint8_t storedTextureId = textureId;
-#endif
-
 	for(int x = sx1; x < firstx; x++)
 	{
 		Renderer_advanceWallInterpolation(dx, dw, wstep, &w, &werror, du, ustep, &u, &uerror);
@@ -1663,7 +989,17 @@ void Renderer_drawWall_impl(Renderer* self, int16_t _x1, int16_t _z1, int16_t _x
 	for(int x = firstx; x <= lastx; x++)
 	{
 		uint8_t drawW = Renderer_clampWallWidth(w);
-		Renderer_storeWallColumn(self, (uint8_t)x, drawW, u, storedTextureId);
+		if(drawW > self->wbuffer[x])
+		{
+			self->wbuffer[x] = drawW;
+
+#ifdef DEFER_RENDER
+			self->ubuffer[x] = u;
+			self->texbuffer[x] = textureId;
+#else
+			Renderer_drawStrip(self, x, drawW, u, textureId);
+#endif
+		}
 
 		Renderer_advanceWallInterpolation(dx, dw, wstep, &w, &werror, du, ustep, &u, &uerror);
 	}
@@ -1679,12 +1015,6 @@ void Renderer_drawDoors(Renderer* self){
 		{
 			continue;
 		}
-#if WOLF3D_SEEN_WALL_BITSET
-		if(!Renderer_isFrustrumClipped(self, door->x, door->z))
-		{
-			Map_markSeenWall(&engine.map, door->x, door->z);
-		}
-#endif
 		
 		if(door->type == DoorType_SecretPushWall)
 		{
@@ -1766,12 +1096,7 @@ void Renderer_drawDoors(Renderer* self){
 		}
 	}
 }
-void Renderer_queueSprite(Renderer* self, const SpriteFrame* frame, const uint8_t* spriteData, int16_t _x, int16_t _z)
-{
-	Renderer_queueSpriteScaled(self, frame, spriteData, _x, _z, CELL_SIZE / 2);
-}
-
-void Renderer_queueSpriteScaled(Renderer* self, const SpriteFrame* frame, const uint8_t* spriteData, int16_t _x, int16_t _z, uint8_t scaleDiv){
+void Renderer_queueSprite(Renderer* self, const SpriteFrame* frame, const uint8_t* spriteData, int16_t _x, int16_t _z){
 #if 1
 	int cellX = WORLD_TO_CELL(_x);
 	int cellZ = WORLD_TO_CELL(_z);
@@ -1831,7 +1156,6 @@ void Renderer_queueSpriteScaled(Renderer* self, const SpriteFrame* frame, const 
 	self->renderQueue[newItem].w = w;
 	self->renderQueue[newItem].frame = frame;
 	self->renderQueue[newItem].data = spriteData;
-	self->renderQueue[newItem].scaleDiv = scaleDiv ? scaleDiv : (CELL_SIZE / 2);
 
 	if(self->renderQueueHead == NULL_QUEUE_ITEM)
 	{
@@ -1876,26 +1200,20 @@ void Renderer_drawQueuedSprite(Renderer* self, uint8_t id){
 	if(frameWidth == 0 || frameHeight == 0 || self->renderQueue[id].w == 0)
 		return;
 
-	uint8_t scaleDiv = self->renderQueue[id].scaleDiv;
-	if(scaleDiv == 0)
-	{
-		scaleDiv = CELL_SIZE / 2;
-	}
-
 	int16_t halfW = self->renderQueue[id].w >> 1;
 	int16_t y2 = (HALF_DISPLAYHEIGHT) + halfW;
-	int16_t y1 = y2 - (self->renderQueue[id].w * frameHeight) / scaleDiv;
+	int16_t y1 = y2 - (self->renderQueue[id].w * frameHeight) / (CELL_SIZE / 2);
 
 	if(y2 < 0 || y1 >= DISPLAYHEIGHT)
 		return;
 
 	int16_t w = self->renderQueue[id].w;
 
-	int16_t dx = (w * frameWidth) / scaleDiv;
+	int16_t dx = (w * frameWidth) / (CELL_SIZE / 2);
 	if(dx <= 0)
 		return;
 
-	int16_t sx1 = self->renderQueue[id].x - halfW + (w * pgm_read_byte(&self->renderQueue[id].frame->xOffset)) / scaleDiv;
+	int16_t sx1 = self->renderQueue[id].x - halfW + (w * pgm_read_byte(&self->renderQueue[id].frame->xOffset)) / (CELL_SIZE / 2);
 	int16_t sx2 = sx1 + dx;
 	int16_t firstx = max(sx1, 0);
 	int16_t lastx = min(sx2, DISPLAYWIDTH - 1);
