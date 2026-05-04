@@ -37,9 +37,9 @@
  * level is the WolfenduinoFX boss floor.
  */
 #if WOLF3D_ENABLE_BOSS
-#define WOLF3D_FLASH_LEVEL_COUNT 4
+#define WOLF3D_FLASH_LEVEL_COUNT 5
 #else
-#define WOLF3D_FLASH_LEVEL_COUNT 3
+#define WOLF3D_FLASH_LEVEL_COUNT 4
 #endif
 #define WOLF3D_MENU_START_SELECTS 1
 #define WOLF3D_MODE23_INVERT_OUTPUT 1
@@ -200,8 +200,8 @@
 
 #define DOOR_FRAME_TEXTURE 19
 
-#define MAX_ACTIVE_ACTORS 4
-#define MAX_ACTIVE_ITEMS 10
+#define MAX_ACTIVE_ACTORS 5
+#define MAX_ACTIVE_ITEMS 12
 
 #define EMPTY_ITEM_SLOT 0xff
 #define DYNAMIC_ITEM_ID 0xfe

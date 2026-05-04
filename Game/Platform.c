@@ -49,11 +49,15 @@ static const uint8_t Wolf3D_soundPatchMap[Sound_Count] PROGMEM =
 	WOLF_PATCH_DOGBARKSND,
 	WOLF_PATCH_DOGATTACKSND,
 	WOLF_PATCH_DOGDEATHSND,
+	WOLF_PATCH_SCHUTZADSND,
+	WOLF_PATCH_SSFIRESND,
 	WOLF_PATCH_NAZIFIRESND,
-	WOLF_PATCH_ATKMACHINEGUNSND,
-	WOLF_PATCH_NAZIFIRESND,
-	WOLF_PATCH_ATKMACHINEGUNSND,
-	WOLF_PATCH_DEATHSCREAM1SND,
+	WOLF_PATCH_BOSSFIRESND,
+	WOLF_PATCH_LEBENSND,
+	WOLF_PATCH_HALTSND,
+	WOLF_PATCH_DEATHSCREAM2SND,
+	WOLF_PATCH_DEATHSCREAM3SND,
+	WOLF_PATCH_LEBENSND,
 	WOLF_PATCH_TAKEDAMAGESND,
 	WOLF_PATCH_PLAYERDEATHSND,
 };
@@ -75,11 +79,15 @@ static const uint8_t Wolf3D_enemySoundPatchMap[Sound_Count] PROGMEM =
 	WOLF_PATCH_PCM_DOGBARKSND,
 	WOLF_PATCH_PCM_DOGATTACKSND,
 	WOLF_PATCH_PCM_DOGDEATHSND,
+	WOLF_PATCH_PCM_SCHUTZADSND,
+	WOLF_PATCH_PCM_SSFIRESND,
 	WOLF_PATCH_PCM_NAZIFIRESND,
-	WOLF_PATCH_PCM_ATKMACHINEGUNSND,
-	WOLF_PATCH_PCM_NAZIFIRESND,
-	WOLF_PATCH_PCM_ATKMACHINEGUNSND,
-	WOLF_PATCH_PCM_DEATHSCREAM1SND,
+	WOLF_PATCH_PCM_BOSSFIRESND,
+	WOLF_PATCH_PCM_LEBENSND,
+	WOLF_PATCH_PCM_HALTSND,
+	WOLF_PATCH_PCM_DEATHSCREAM2SND,
+	WOLF_PATCH_PCM_DEATHSCREAM3SND,
+	WOLF_PATCH_PCM_LEBENSND,
 	WOLF_PATCH_TAKEDAMAGESND,
 	WOLF_PATCH_PLAYERDEATHSND,
 };
@@ -255,7 +263,8 @@ void Platform_init(void)
 	Platform.inputState = 0;
 	Platform.muted = 0;
 	Platform.lastSfxFrame = 0xffff;
-	Platform.sfxTriggersThisFrame = 0;
+	Platform.normalSfxTriggersThisFrame = 0;
+	Platform.enemySfxTriggersThisFrame = 0;
 	clearDisplay(0);
 }
 
@@ -367,16 +376,35 @@ static void Platform_playSoundVolumeRouted(uint8_t soundId, uint8_t volume, bool
 	}
 
 #if WOLF3D_SFX_MAX_TRIGGERS_PER_FRAME > 0
+	/*
+	 * Normal SFX and enemy-channel SFX use different hardware tracks, so do
+	 * not let a player weapon sound consume the same per-frame trigger budget
+	 * as an enemy death/alert/attack.  With one shared counter, killing an
+	 * enemy on the same frame as the pistol/machinegun trigger silently dropped
+	 * the enemy death sound.
+	 */
 	if(Platform.lastSfxFrame != (uint16_t)engine.frameCount)
 	{
 		Platform.lastSfxFrame = (uint16_t)engine.frameCount;
-		Platform.sfxTriggersThisFrame = 0;
+		Platform.normalSfxTriggersThisFrame = 0;
+		Platform.enemySfxTriggersThisFrame = 0;
 	}
-	if(Platform.sfxTriggersThisFrame >= WOLF3D_SFX_MAX_TRIGGERS_PER_FRAME)
+	if(enemyChannel)
 	{
-		return;
+		if(Platform.enemySfxTriggersThisFrame >= WOLF3D_SFX_MAX_TRIGGERS_PER_FRAME)
+		{
+			return;
+		}
+		Platform.enemySfxTriggersThisFrame++;
 	}
-	Platform.sfxTriggersThisFrame++;
+	else
+	{
+		if(Platform.normalSfxTriggersThisFrame >= WOLF3D_SFX_MAX_TRIGGERS_PER_FRAME)
+		{
+			return;
+		}
+		Platform.normalSfxTriggersThisFrame++;
+	}
 #endif
 
 #if defined(__AVR__) && WOLF3D_ENABLE_UZEBOX_SFX

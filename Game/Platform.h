@@ -32,7 +32,8 @@ typedef struct PlatformState
 	uint16_t inputState;
 	uint8_t muted;
 	uint16_t lastSfxFrame;
-	uint8_t sfxTriggersThisFrame;
+	uint8_t normalSfxTriggersThisFrame;
+	uint8_t enemySfxTriggersThisFrame;
 } PlatformState;
 
 extern PlatformState Platform;

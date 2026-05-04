@@ -51,6 +51,19 @@ static uint16_t Actor_bossHpForDifficulty(void)
 	}
 }
 
+
+static uint8_t Actor_randomGuardDeathSound(void)
+{
+	switch(getRandomNumber() & 0x3)
+	{
+	case 0:
+		return Sound_EnemyDeath2;
+	case 1:
+		return Sound_EnemyDeath3;
+	default:
+		return Sound_EnemyDeath;
+	}
+}
 void Actor_init(Actor* self, uint8_t id, uint8_t actorType, int8_t cellX, int8_t cellZ){
 	self->spawnId = id;
 	self->type = actorType;
@@ -113,6 +126,10 @@ void Actor_update(Actor* self){
 			else if(self->type == ActorType_SS)
 			{
 				Platform_playEnemySoundAt(Sound_SSAlert, self->x, self->z);
+			}
+			else
+			{
+				Platform_playEnemySoundAt(Sound_GuardAlert, self->x, self->z);
 			}
 			Actor_switchState(self, ActorState_Active);
 		}
@@ -235,7 +252,7 @@ void Actor_damage(Actor* self, int amount){
 		}
 		else if(self->type == ActorType_SS)
 		{
-			Platform_playEnemySoundAt(Sound_EnemyDeath, self->x, self->z);
+			Platform_playEnemySoundAt(Sound_SSDeath, self->x, self->z);
 			Actor_dropItem(self, Tile_Item_MachineGun);
 		}
 		else if(self->type == ActorType_Boss)
@@ -245,7 +262,7 @@ void Actor_damage(Actor* self, int amount){
 		}
 		else
 		{
-			Platform_playEnemySoundAt(Sound_EnemyDeath, self->x, self->z);
+			Platform_playEnemySoundAt(Actor_randomGuardDeathSound(), self->x, self->z);
 			Actor_dropItem(self, Tile_Item_Clip);
 		}
 	}
