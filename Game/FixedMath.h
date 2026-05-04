@@ -1,0 +1,30 @@
+#ifndef FIXED_MATH_H_
+#define FIXED_MATH_H_
+
+#include "Defines.h"
+
+#define FIXED_SHIFT 7
+#define FIXED_ONE (1 << FIXED_SHIFT)
+#define FIXED_HALF (1 << (FIXED_SHIFT - 1))
+#define FIXED_TO_INT(x) ((x) >> FIXED_SHIFT)
+#define FIXED_TO_INT_ROUNDED(x) (((x) + FIXED_HALF) >> FIXED_SHIFT)
+#define INT_TO_FIXED(x) ((x) << FIXED_SHIFT)
+#define DEGREES_90 64
+#define DEGREES_180 128
+#define DEGREES_270 192
+#define DEGREES_360 256
+
+typedef int16_t fixed_t;
+typedef uint8_t angle_t;
+
+fixed_t FixedMath_Sin(angle_t x);
+static inline fixed_t FixedMath_Cos(angle_t x)
+{
+	return FixedMath_Sin((angle_t)(DEGREES_90 + (int16_t)x));
+}
+
+int8_t clamp(int8_t x, int8_t lower, int8_t upper);
+uint8_t getRandomNumber(void);
+uint16_t getRandomNumber16(void);
+
+#endif
