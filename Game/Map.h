@@ -53,6 +53,7 @@ typedef struct Door
 {
 	uint8_t type;
 	int8_t x, z;
+	int8_t originX, originZ;
 	uint8_t open;
 	uint8_t state;
 	uint8_t texture;

@@ -12,7 +12,8 @@ typedef struct RenderQueueItem
 {
 	const SpriteFrame* frame;
 	const uint8_t* data;
-	uint8_t x, w;
+	int16_t x;
+	uint8_t w;
 	uint8_t scaleDiv;
 	uint8_t next;
 } RenderQueueItem;

@@ -467,44 +467,48 @@ bool Actor_shouldShootPlayer(Actor* self, bool movementSucceeded){
 	return false;
 }
 void Actor_shootPlayer(Actor* self){
-	if(self->flags.seesPlayer)
+	if(!Map_isClearLine(&engine.map, self->x, self->z, engine.player.x, engine.player.z))
 	{
-		int8_t dist = Actor_getPlayerCellDistance(self);
-		int hitchance = 256 - dist * 16;
+		self->flags.seesPlayer = 0;
+		return;
+	}
 
-		if(self->type == ActorType_Dog && dist > 1)
+
+	int8_t dist = Actor_getPlayerCellDistance(self);
+	int hitchance = 256 - dist * 16;
+
+	if(self->type == ActorType_Dog && dist > 1)
+	{
+		return;
+	}
+
+	if(getRandomNumber() < hitchance)
+	{
+		uint8_t damage;
+
+		if(dist < 2)
+			damage = getRandomNumber() >> 2;
+		else if(dist < 4)
+			damage = getRandomNumber() >> 3;
+		else
+			damage = getRandomNumber() >> 4;
+
+		if(self->type == ActorType_Boss)
 		{
-			return;
+			damage = (uint8_t)(damage + (getRandomNumber() >> 4));
 		}
 
-		if(getRandomNumber() < hitchance)
+		if(damage > 0)
 		{
-			uint8_t damage;
-
-			if (dist < 2)
-				damage = getRandomNumber()>>2;
-			else if (dist<4)
-				damage = getRandomNumber()>>3;
-			else
-				damage = getRandomNumber()>>4;
-
-			if(self->type == ActorType_Boss)
+			Player_damage(&engine.player, damage);
+			if(engine.player.hp == 0)
 			{
-				damage = (uint8_t)(damage + (getRandomNumber() >> 4));
-			}
-
-			if(damage > 0)
-			{
-				Player_damage(&engine.player, damage);
-				if(engine.player.hp == 0)
+				for(int8_t id = 0; id < MAX_ACTIVE_ACTORS; id++)
 				{
-					for(int8_t id = 0; id < MAX_ACTIVE_ACTORS; id++)
+					if(self == &engine.actors[id])
 					{
-						if(self == &engine.actors[id])
-						{
-							engine.player.killer = id;
-							break;
-						}
+						engine.player.killer = id;
+						break;
 					}
 				}
 			}

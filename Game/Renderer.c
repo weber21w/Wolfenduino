@@ -291,10 +291,10 @@ static inline void Renderer_writeWeaponTexPixelFast(int16_t x, int16_t y, uint8_
 	switch(texData)
 	{
 	case 1:
-		Renderer_writePixelFast((uint8_t)x, (uint8_t)y, 1);
+		Renderer_writePixelFast((uint8_t)x, (uint8_t)y, 0);
 		break;
 	case 2:
-		Renderer_writePixelFast((uint8_t)x, (uint8_t)y, 0);
+		Renderer_writePixelFast((uint8_t)x, (uint8_t)y, 1);
 		break;
 	case 3:
 	default:
@@ -1489,8 +1489,8 @@ void Renderer_drawWall_impl(Renderer* self, int16_t _x1, int16_t _z1, int16_t _x
 	}
 
 	// apply perspective projection
-	int16_t vx1 = (int16_t)(x1 * NEAR_PLANE * CAMERA_SCALE / z1);  
-	int16_t vx2 = (int16_t)(x2 * NEAR_PLANE * CAMERA_SCALE / z2); 
+	int16_t vx1 = (int16_t)(((int32_t)x1 * NEAR_PLANE * CAMERA_SCALE) / z1);  
+	int16_t vx2 = (int16_t)(((int32_t)x2 * NEAR_PLANE * CAMERA_SCALE) / z2); 
 
 	// transform the end points into screen space
 	int16_t sx1 = (int16_t)((DISPLAYWIDTH / 2) + vx1);
@@ -1599,8 +1599,8 @@ void Renderer_drawWall_impl(Renderer* self, int16_t _x1, int16_t _z1, int16_t _x
 	}
 
 	// apply perspective projection
-	int16_t vx1 = (int16_t)(x1 * NEAR_PLANE * CAMERA_SCALE / z1);  
-	int16_t vx2 = (int16_t)(x2 * NEAR_PLANE * CAMERA_SCALE / z2); 
+	int16_t vx1 = (int16_t)(((int32_t)x1 * NEAR_PLANE * CAMERA_SCALE) / z1);  
+	int16_t vx2 = (int16_t)(((int32_t)x2 * NEAR_PLANE * CAMERA_SCALE) / z2); 
 
 	// transform the end points into screen space
 	int16_t sx1 = (int16_t)((DISPLAYWIDTH / 2) + vx1);
@@ -1674,6 +1674,11 @@ void Renderer_drawDoors(Renderer* self){
 	{
 		Door* door = &engine.map.doors[n];
 		uint8_t textureId = door->texture;
+
+		if(door->type == DoorType_None)
+		{
+			continue;
+		}
 
 		if(!Map_isValid(&engine.map, door->x, door->z))
 		{
@@ -1783,17 +1788,17 @@ void Renderer_queueSpriteScaled(Renderer* self, const SpriteFrame* frame, const 
 	int16_t xt = (int16_t)(FIXED_TO_INT(self->view.rotSin * (int32_t)(_x-self->view.x)) + FIXED_TO_INT(self->view.rotCos * (int32_t)(_z-self->view.z)));
 
 	// clip to the front plane
-	if (zt < CLIP_PLANE)
+	if (zt < SPRITE_CLIP_PLANE)
 		return;
 
 	// apply perspective projection
-	int16_t vx = (int16_t)(xt * NEAR_PLANE * CAMERA_SCALE / zt);  
+	int32_t vx32 = ((int32_t)xt * NEAR_PLANE * CAMERA_SCALE) / zt;
 
-	if(vx <= -DISPLAYWIDTH || vx >= DISPLAYWIDTH)
+	if(vx32 <= -DISPLAYWIDTH || vx32 >= DISPLAYWIDTH)
 		return;
 
 	int16_t w = (int16_t)((CELL_SIZE * NEAR_PLANE * CAMERA_SCALE) / zt);
-	int16_t x = vx + HALF_DISPLAYWIDTH;
+	int16_t x = (int16_t)(vx32 + HALF_DISPLAYWIDTH);
 
 	if(w <= 0)
 		return;

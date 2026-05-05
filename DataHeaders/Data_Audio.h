@@ -145,9 +145,8 @@ static const char wolf_sfx_CLOSEDOORSND[] PROGMEM ={
 static const char wolf_sfx_PUSHWALLSND[] PROGMEM ={
 	0,PC_WAVE,4,	/* waveform */
 	0,PC_ENV_SPEED,0,	/* hold volume */
-	30,PC_WAVE,4,	/* sound waveform */
-	0,PC_PITCH,48,	/* C-5, 130.8 Hz; source 131.7 Hz, raw 151 */
-	1,PC_WAVE,0,	/* silence waveform */
+	0,PC_PITCH,48,	/* C-5, 130.8 Hz; set pitch before first wait */
+	30,PC_WAVE,0,	/* silence waveform */
 	4,PC_WAVE,4,	/* sound waveform */
 	0,PC_PITCH,48,	/* C-5, 130.8 Hz; source 128.3 Hz, raw 155 */
 	1,PC_NOTE_CUT,0,	/* end */

@@ -160,11 +160,18 @@ void Map_update(Map* self){
 bool Map_isDoor(Map* self, int8_t cellX, int8_t cellZ){
 	return Map_tileIsDoor(Map_getTile(self, cellX, cellZ));
 }
+static bool Door_isSecretPushWallMoved(Door* door){
+	return door->type == DoorType_SecretPushWall
+		&& (door->x != door->originX || door->z != door->originZ || door->state != DoorState_Idle || door->open != 0);
+}
 bool Map_isBlocked(Map* self, int8_t cellX, int8_t cellZ){
 	uint8_t tile = Map_getTile(self, cellX, cellZ);
 
+	if(tile == MAP_OUT_OF_BOUNDS)
+		return true;
+
 	// Check if self is a wall
-	if((tile >= Tile_FirstWall && tile <= Tile_LastWall))
+	if(Map_tileIsWall(tile))
 		return true;
 
 	// Check if self is a blocking decoration
@@ -415,10 +422,7 @@ uint8_t Map_streamIn(Map* self, uint8_t tile, uint8_t metadata, int8_t x, int8_t
 	}
 	else if(tile == Tile_SecretPushWall)
 	{
-		if(engine.gameState == GameState_Loading)
-		{
-			Map_streamInDoor(self, DoorType_SecretPushWall, metadata, x, z);
-		}
+		Map_streamInDoor(self, DoorType_SecretPushWall, metadata, x, z);
 		return Tile_Empty;
 	}
 
@@ -525,11 +529,27 @@ void Map_streamInDoor(Map* self, uint8_t type, uint8_t metadata, int8_t x, int8_
 
 	for(int8_t n = 0; n < MAX_DOORS; n++)
 	{
-		if(freeIndex == -1 && self->doors[n].type == DoorType_None)
+		Door* door = &self->doors[n];
+
+		if(freeIndex == -1 && door->type == DoorType_None)
 		{
 			freeIndex = n;
 		}
-		if(self->doors[n].type != DoorType_None && self->doors[n].x == x && self->doors[n].z == z)
+
+		if(door->type == DoorType_None)
+		{
+			continue;
+		}
+
+		if(type == DoorType_SecretPushWall)
+		{
+			if(door->type == DoorType_SecretPushWall && door->originX == x && door->originZ == z)
+			{
+				// Already streamed in, possibly moved away from its original cell.
+				return;
+			}
+		}
+		else if(door->x == x && door->z == z)
 		{
 			// Already streamed in
 			return;
@@ -540,7 +560,15 @@ void Map_streamInDoor(Map* self, uint8_t type, uint8_t metadata, int8_t x, int8_
 	{
 		for(int8_t n = 0; n < MAX_DOORS; n++)
 		{
-			if(self->doors[n].type != DoorType_SecretPushWall && !Map_isValid(self, self->doors[n].x, self->doors[n].z))
+			Door* door = &self->doors[n];
+			if(door->type == DoorType_None)
+			{
+				freeIndex = n;
+				break;
+			}
+
+			if(!Map_isValid(self, door->x, door->z)
+				&& (door->type != DoorType_SecretPushWall || !Door_isSecretPushWallMoved(door)))
 			{
 				freeIndex = n;
 				break;
@@ -552,7 +580,9 @@ void Map_streamInDoor(Map* self, uint8_t type, uint8_t metadata, int8_t x, int8_
 	{
 		for(int8_t n = 0; n < MAX_DOORS; n++)
 		{
-			if(self->doors[n].type != DoorType_SecretPushWall && Renderer_isFrustrumClipped(&engine.renderer, self->doors[n].x, self->doors[n].z))
+			Door* door = &self->doors[n];
+			if(Renderer_isFrustrumClipped(&engine.renderer, door->x, door->z)
+				&& (door->type != DoorType_SecretPushWall || !Door_isSecretPushWallMoved(door)))
 			{
 				freeIndex = n;
 				break;
@@ -568,6 +598,8 @@ void Map_streamInDoor(Map* self, uint8_t type, uint8_t metadata, int8_t x, int8_
 
 	self->doors[freeIndex].x = x;
 	self->doors[freeIndex].z = z;
+	self->doors[freeIndex].originX = x;
+	self->doors[freeIndex].originZ = z;
 	self->doors[freeIndex].open = 0;
 	self->doors[freeIndex].state = DoorState_Idle;
 	self->doors[freeIndex].type = type;
@@ -591,12 +623,14 @@ void Map_openDoorsAt(Map* self, int8_t x, int8_t z, int8_t direction){
 		{
 			if(self->doors[n].type == DoorType_SecretPushWall)
 			{
-				if(direction != Direction_None)
+				if(direction != Direction_None
+					&& self->doors[n].state == DoorState_Idle
+					&& self->doors[n].open == 0)
 				{
 					int8_t offX = pgm_read_byte(&PushWallDirections[(direction) * 2]);
 					int8_t offZ = pgm_read_byte(&PushWallDirections[(direction) * 2 + 1]);
 
-					if(Map_isValid(&engine.map, x + offX, z + offZ) && !Map_isSolid(&engine.map, x + offX, z + offZ))
+					if(Map_isValid(self, x + offX, z + offZ) && !Map_isBlocked(self, x + offX, z + offZ))
 					{
 						Platform_playSoundCell(Sound_PushWall, x, z);
 						self->doors[n].state = DoorState_FirstPushWallState + direction;
@@ -631,7 +665,7 @@ void Door_update(Door* self){
 
 			self->x += offX;
 			self->z += offZ;
-			if(!Map_isValid(&engine.map, self->x + offX, self->z + offZ) || Map_isSolid(&engine.map, self->x + offX, self->z + offZ))
+			if(!Map_isValid(&engine.map, self->x + offX, self->z + offZ) || Map_isBlocked(&engine.map, self->x + offX, self->z + offZ))
 			{
 				self->state = DoorState_Idle;
 			}
@@ -754,13 +788,11 @@ bool Map_isClearLine(Map* self, int16_t x1, int16_t z1, int16_t x2, int16_t z2)
             z = WORLD_TO_CELL(zfrac);
             zfrac += zstep;
 
-            uint8_t tile = Map_getTile(self, x, z);
+            int8_t checkX = x;
+            int8_t checkZ = z;
             x += xstep;
 
-            if (!tile)
-                continue;
-
-            if (tile >= Tile_FirstWall && tile <= Tile_LastWall)
+            if (Map_isBlocked(self, checkX, checkZ))
                 return false;
 
             //
@@ -808,13 +840,11 @@ bool Map_isClearLine(Map* self, int16_t x1, int16_t z1, int16_t x2, int16_t z2)
             x = WORLD_TO_CELL(xfrac);
             xfrac += xstep;
 
-            uint8_t tile = Map_getTile(self, x, z);
+            int8_t checkX = x;
+            int8_t checkZ = z;
             z += zstep;
 
-            if (!tile)
-                continue;
-
-            if (tile >= Tile_FirstWall && tile <= Tile_LastWall)
+            if (Map_isBlocked(self, checkX, checkZ))
                 return false;
 
             //
